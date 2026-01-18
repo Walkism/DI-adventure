@@ -1,3 +1,80 @@
+
+# “马里奥游戏智能体的特征工程探究”大作业代码配置与运行（Updated by 盛禹泽）
+
+> **Note:** 本 README 在原有基础上进行了更新，增加了自定义环境配置流程、新增的 Reward Wrapper 功能介绍和代码运行方式说明。
+
+## 0. 自定义更新内容
+
+### 0.1 新增特性
+本项目在原有基础上新增了3种 Reward Wrapper，用于引导智能体产生更多样化的行为，包括收集金币、攻击敌人和通用的拿更高分数。支持在训练和评估脚本中通过命令行参数设定奖励系数。此外，本项目也增加了一些其他新特性，包括测评后保存最终info为json，保存测评视频到exp目录等。
+
+**新增命令行参数：**
+- `--coin_reward_scale` / `-crs`: 金币奖励系数（浮点数，默认 0.0）。
+- `--attack_reward_scale` / `-ars`: 击杀板栗仔奖励系数（浮点数，默认 0.0）。
+- `--score_reward_scale` / `-srs`: 通用分数奖励系数（浮点数，默认 0.0）。
+
+**使用示例：**
+1. **训练命令:**
+   ```bash
+   python3 -u mario_dqn_main.py -s <SEED> -v <VERSION> -a <ACTION SET> -o <FRAME NUMBER> -crs <金币奖励系数> -ars <击杀板栗仔奖励系数> -srs <游戏分数奖励系数>
+
+   # 示例1：训练一个专注于吃金币的智能体 (v1环境, 12种动作, 叠4帧, 金币奖励系数200.0)
+   python3 -u mario_dqn_main.py -s 0 -v 1 -a 12 -o 4 -crs 200.0
+   
+   # 示例2：训练一个专注于攻击敌人的智能体 (攻击奖励系数1.0)
+   python3 -u mario_dqn_main.py -s 0 -v 1 -a 12 -o 4 -ars 1.0
+
+   # 示例3：训练一个通用地拿高分的智能体 (分数奖励系数1.0)
+   python3 -u mario_dqn_main.py -s 0 -v 1 -a 12 -o 4 -srs 1.0
+   ```
+
+2. **评估命令:**
+   ```bash
+   # 评估时同样支持传入奖励系数，以便观察特定奖励下的最终回报
+   python3 -u evaluate.py -ckpt <CHECKPOINT_PATH> -v <VERSION> -a <ACTION SET> -o <FRAME NUMBER> -crs <金币奖励系数> -ars <击杀板栗仔奖励系数> -srs <游戏分数奖励系数>
+    ```
+- 此外该命令还会保存评估时的游戏录像，Grad-CAM视频，以及原始观测空间的视频到`exp/实验名`目录下，便于查看。
+
+### 0.2 环境配置流程
+以下是在 conda 环境下配置本项目环境的完整流程（亲测可用）：
+
+```bash
+# 1. 创建并激活 conda 环境
+conda create -n mario python=3.8
+conda activate mario
+
+# 2. 克隆 DI-adventure 仓库
+git clone https://github.com/opendilab/DI-adventure.git 
+# git clone https://bgithub.xyz/opendilab/DI-adventure # (可选)国内镜像加速
+
+# 3. 安装依赖 DI-engine (依照原 README，指定 commit 版本)
+git clone https://github.com/opendilab/DI-engine.git
+# git clone https://bgithub.xyz/opendilab/DI-engine.git # (可选)国内镜像加速
+
+cd DI-engine
+git checkout 4c607d400d3290a27ad1e5b7fa8eeb4c2a1a4745
+# 注意：需修改 DI-engine/setup.py，在第120行末尾加个逗号
+
+# 4. 安装 PyTorch (根据你的 CUDA 版本选择，原 README 建议 1.10.0)
+# 示例：CUDA 11.1 以支持 sm_86
+pip install torch==1.10.0+cu111 torchvision==0.11.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+
+# 5. 安装 DI-engine
+pip install -e .
+
+# 6. 安装 Gym 及 Mario 环境
+pip install gym==0.25.1
+pip install gym-super-mario-bros  # version 7.4.0
+
+# 7. 安装可视化等工具依赖
+pip install grad-cam==1.4.0       # 必须指定版本，否则 DI-engine 接口不兼容
+pip install protobuf==3.20.3      # 降级 protobuf 以修复 tensorboard 报错
+pip install moviepy               # 用于 TensorBoard 的 add_video 功能
+```
+
+---
+
+
 # 强化学习大作业代码配置与运行
 > 同学们不要对于RL背后的数学原理和复杂的代码逻辑感到困扰，首先是本次大作业会很少涉及到这一部分，仓库中对这一部分都有着良好的封装；其次是有问题（原理或者代码实现上的）可以随时提问一起交流，方式包括但不限于：
 > - github issue: https://github.com/opendilab/DI-adventure/issues

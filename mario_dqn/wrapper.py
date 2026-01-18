@@ -87,6 +87,166 @@ class CoinRewardWrapper(gym.Wrapper):
         self.num_coins = info['coins']
         return obs, reward, done, info
 
+# 修复版硬币奖励wrapper
+class CustomCoinRewardWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env, coin_reward_scale: float = 200.0):
+        super().__init__(env)
+        self.num_coins = 0
+        self.coin_reward_scale = coin_reward_scale
+
+    def reset(self, **kwargs):
+        # 【关键修复】每次重置环境时，必须清零金币计数
+        self.num_coins = 0
+        return self.env.reset(**kwargs)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        
+        # 计算新增金币
+        # 注意：info['coins'] 是当前累积金币数
+        coin_diff = info['coins'] - self.num_coins
+        
+        if coin_diff > 0:
+            # 【关键策略】大幅提升奖励。
+            # 原始移动奖励一帧大概在0-2之间，stack4帧约10分左右。
+            # 给 10 分太少，会被移动奖励淹没。
+            # 建议给 100-200，强行告诉 AI “金币比命重要”。
+            reward += coin_diff * self.coin_reward_scale
+            # print(f"Agent ate a coin! Reward boost! Total coins: {info['coins']}") # 调试用
+            
+        self.num_coins = info['coins']
+        return obs, reward, done, info
+
+
+class GrowthRewardWrapper(gym.Wrapper):
+    """
+    只负责奖励“变大” (Small -> Tall/Fireball)
+    """
+    def __init__(self, env: gym.Env, growth_reward=500.0):
+        super().__init__(env)
+        self.growth_reward = growth_reward
+        self.last_status = 'small'
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        self.last_status = 'small'
+        return obs
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        
+        # 获取当前状态
+        curr_status = info.get('status', 'small')
+
+        # 逻辑：如果从小变大（或变火球），给予奖励
+        if self.last_status == 'small' and curr_status in ['tall', 'fireball']:
+            reward += self.growth_reward
+            # print(f"wrapper: Growth! Reward +{self.growth_reward}")
+
+        self.last_status = curr_status
+        return obs, reward, done, info
+
+
+class AttackRewardWrapper(gym.Wrapper):
+    """
+    只负责奖励“战斗/破坏” (踩怪、顶砖)。
+    关键逻辑：从分数增量中剔除 [金币分数] 和 [吃蘑菇分数]。
+    同时在 info 中记录当前 Episode 累计获得的战斗分数。
+    """
+    def __init__(self, env: gym.Env, attack_reward_scale=1.0):
+        super().__init__(env)
+        self.attack_reward_scale = attack_reward_scale
+        # 状态记录
+        self.last_score = 0
+        self.last_coins = 0
+        self.last_status = 'small'
+        # 【新增】用于累计一局内的战斗得分
+        self.total_attack_score = 0
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        # 重置所有计数器
+        self.last_score = 0
+        self.last_coins = 0
+        self.last_status = 'small'
+        self.total_attack_score = 0 # 【新增】清零
+        return obs
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+
+        curr_score = info.get('score', 0)
+        curr_coins = info.get('coins', 0)
+        curr_status = info.get('status', 'small')
+
+        # 1. 计算总分数增量
+        score_diff = curr_score - self.last_score
+
+        # 2. 计算金币带来的分数 (1 coin = 200 score)
+        coins_diff = curr_coins - self.last_coins
+        score_from_coins = coins_diff * 200
+
+        # 3. 计算变大带来的分数 (Small -> Tall/Fireball = 1000 score)
+        score_from_growth = 0
+        if self.last_status == 'small' and curr_status in ['tall', 'fireball']:
+            score_from_growth = 1000
+
+        # 4. 剥离干扰项，计算“纯战斗/破坏分数” (Instant Attack Score)
+        attack_score_delta = score_diff - score_from_coins - score_from_growth
+
+        if attack_score_delta > 0:
+            # 给 RL 模型奖励
+            reward += attack_score_delta * self.attack_reward_scale
+            # 【新增】累加到总战斗分
+            self.total_attack_score += attack_score_delta
+
+        # 更新历史状态
+        self.last_score = curr_score
+        self.last_coins = curr_coins
+        self.last_status = curr_status
+        
+        # 【新增】将累计战斗分写入 info，方便 Evaluator 读取
+        if done:            
+            info['attack_score'] = self.total_attack_score
+
+        return obs, reward, done, info
+
+class GeneralScoreRewardWrapper(gym.Wrapper):
+    """
+    通用分数奖励 Wrapper。
+    只要游戏的分数(Score)增加了，就给予奖励。
+    这涵盖了：杀怪、吃金币、顶砖块、吃蘑菇等所有能增加分数的行为。
+    """
+    def __init__(self, env: gym.Env, score_reward_scale=0.1):
+        super().__init__(env)
+        self.scale = score_reward_scale
+        self.last_score = 0
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        # 重置分数记录
+        self.last_score = 0
+        return obs
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        
+        # 获取当前分数
+        curr_score = info.get('score', 0)
+        
+        # 计算增量
+        score_diff = curr_score - self.last_score
+        
+        if score_diff > 0:
+            # 只有分数增加时才给奖励
+            # 注意：Super Mario Bros 的分数膨胀很厉害（动不动几百几千）
+            # 所以 scale 建议设小一点（例如 0.01 - 0.1），否则会把移动奖励(x_pos)完全淹没
+            reward += score_diff * self.scale
+            
+        self.last_score = curr_score
+        
+        return obs, reward, done, info
+
 
 # CAM相关，不需要了解
 def dump_arr2video(arr, video_folder):
